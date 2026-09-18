@@ -180,6 +180,19 @@ class TestGetTrainDatasetName:
     def test_dict_without_dataset_name_returns_none(self):
         assert get_train_dataset_name({"train": {"foo": "bar"}}) is None
 
+    @pytest.mark.parametrize(
+        ("train", "expected"),
+        [
+            ({"dataset_cls": "X"}, "X"),
+            ([{"dataset_cls": "X", "dataset_name": "Y"}], "X"),
+            ([{"dataset_name": "Y"}], "Y"),
+        ],
+    )
+    def test_dataset_cls_key(self, train, expected):
+        # dataset_cls is the canonical key; without it the swap guard would
+        # see None and silently skip its check.
+        assert get_train_dataset_name({"train": train}) == expected
+
     def test_list_with_dict_missing_dataset_name_returns_none(self):
         assert get_train_dataset_name({"train": [{"foo": "bar"}]}) is None
 
