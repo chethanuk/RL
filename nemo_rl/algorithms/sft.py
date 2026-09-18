@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import time
 import warnings
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, Mapping, Optional
@@ -569,7 +570,20 @@ def sft_train(
     ):
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
 
-        for batch in train_dataloader:
+        train_iter = iter(train_dataloader)
+        while True:
+            # Pull the batch explicitly so its fetch time (collate, packing,
+            # loader workers) is counted; a `for` header runs it outside
+            # every timer. Recorded as a separate sample: timings are summed.
+            fetch_start = time.perf_counter()
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                break
+            fetch_time = time.perf_counter() - fetch_start
+            timer.record("data_processing", fetch_time)
+            timer.record("total_step_time", fetch_time)
+
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(train_dataloader), master_config.sft.max_num_steps)} {'=' * 25}"
             )
