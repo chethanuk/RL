@@ -63,7 +63,7 @@ if multi_rewards is not None:
     for name, reward_tensor in multi_rewards.items():
         current_batch[name] = reward_tensor
 ```
-For instance, when running `examples/configs/gdpo_math_1B.yaml`, the batch will contain `reward/correctness`, `reward/integer`, and `reward/format`. More details can be found in `HFMultiRewardVerifyWorker`. Users can implement their own multi-reward environments by returning a dict from `step()` with keys using the `reward/` prefix.
+For instance, when running `examples/configs/gdpo_math_1B.yaml`, the batch will contain `reward/correctness`, `reward/integer`, and `reward/format`. More details can be found in `HFMultiRewardVerifyWorker`. By default `reward/format` requires the response to be exactly `<think>...</think>\n<answer>...</answer>`; set `env.math_multi_reward.format_strictness: soft` to also accept text around the two blocks and any whitespace between them. Users can implement their own multi-reward environments by returning a dict from `step()` with keys using the `reward/` prefix.
 
 ## Code Environment
 
