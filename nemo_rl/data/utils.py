@@ -38,7 +38,7 @@ from nemo_rl.environments.utils import create_env
 
 
 def get_train_dataset_name(data_config: DataConfig) -> Optional[str]:
-    """Return the training ``dataset_name`` from a data config.
+    """Return the training dataset's ``dataset_cls`` (or legacy ``dataset_name``).
 
     The shape of ``data_config["train"]`` is not consistent across algorithms
     at the point where checkpoint save/load happens:
@@ -56,7 +56,7 @@ def get_train_dataset_name(data_config: DataConfig) -> Optional[str]:
     if isinstance(train, list):
         train = train[0] if train else None
     if isinstance(train, dict):
-        return train.get("dataset_name")
+        return train.get("dataset_cls") or train.get("dataset_name")
     return None
 
 

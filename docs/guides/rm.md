@@ -172,7 +172,7 @@ Your JSONL files should contain one JSON object per line with the following stru
 
 If you want to plug in a preference dataset class that lives outside the
 `nemo_rl` package (so you don't have to edit the built-in registry), set
-`dataset_name` to a fully qualified dotted import path. The dispatcher
+`dataset_cls` to a fully qualified dotted import path. The dispatcher
 will import the module and resolve the class. The class must accept the
 same kwargs as the built-in datasets (i.e. the full data config) and
 implement `set_task_spec`.
@@ -180,11 +180,16 @@ implement `set_task_spec`.
 ```yaml
 data:
   default:
-    dataset_name: my_pkg.my_module.MyPreferenceDataset  # importable from PYTHONPATH
+    dataset_cls: my_pkg.my_module.MyPreferenceDataset  # importable from PYTHONPATH
 ```
 
 The class must be importable — install it as a package or add its
 parent directory to `PYTHONPATH` before launching training.
+
+`dataset_cls` also takes the class name of a built-in dataset, e.g.
+`dataset_cls: Tulu3PreferenceDataset`. The older `dataset_name` key (a registry name
+such as `Tulu3Preference`, or a dotted path) still works. When both are
+set, `dataset_cls` is used and `dataset_name` is ignored with a warning.
 
 Please note:
 - If you are using a logger, the prefix used for each validation set will be `validation-<NameOfValidationDataset>`. The total validation time, summed across all validation sets, is reported under `timing/validation/total_validation_time`.
