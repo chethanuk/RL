@@ -316,18 +316,38 @@ def setup_preference_data(
     )
 
     print("\n▶ Setting up data...")
-    # setup train dataset
-    if "default" in data_config:
-        update_single_dataset_config(data_config["train"], data_config["default"])
-    data = load_preference_dataset(data_config["train"])
     typed_processor_fn = cast(TaskDataProcessFnCallable, processor_fn)
-    task_data_processors = {data.task_name: (data.task_spec, typed_processor_fn)}
-    task_data_preprocessors = {}
-    if hasattr(data, "preprocessor") and data.preprocessor is not None:
-        task_data_preprocessors[data.task_name] = data.preprocessor
+    default_config = data_config.get("default")
 
+    def load(configs, split):
+        # A single dataset config is the same as a list of one.
+        if isinstance(configs, dict):
+            configs = [configs]
+        loaded = []
+        for cfg in configs:
+            if default_config is not None:
+                update_single_dataset_config(cfg, default_config)
+            data = load_preference_dataset(cfg)
+            loaded.append(data)
+            print(
+                f"  - Loaded {split} dataset {data.task_name} with {len(data.dataset)} samples."
+            )
+        return loaded
+
+    def processors(data_list):
+        task_data_processors = {}
+        task_data_preprocessors = {}
+        for data in data_list:
+            task_data_processors[data.task_name] = (data.task_spec, typed_processor_fn)
+            if getattr(data, "preprocessor", None) is not None:
+                task_data_preprocessors[data.task_name] = data.preprocessor
+        return task_data_processors, task_data_preprocessors
+
+    # setup train dataset
+    data_list = load(data_config["train"], "training")
+    task_data_processors, task_data_preprocessors = processors(data_list)
     dataset = AllTaskProcessedDataset(
-        data.dataset,
+        merge_datasets([data.dataset for data in data_list]),
         tokenizer,
         None,
         task_data_processors,
@@ -336,23 +356,39 @@ def setup_preference_data(
     )
     print(f"  ✓ Training dataset loaded with {len(dataset)} samples.")
 
-    # setup validation dataset
-    # TODO @yukih: unify the code when support multiple datasets for preference dataset
+    # setup validation dataset: splits of the train datasets plus `validation`
+    # are merged into one "default" set. The legacy `val_data_paths` dict adds
+    # separately named sets and, when set, `validation` is ignored.
     val_dataset = {}
-    val_task_data_preprocessors = {}
-    if getattr(data, "val_dataset", None) is not None:
+    val_sources = [
+        (data, data.val_dataset)
+        for data in data_list
+        if getattr(data, "val_dataset", None) is not None
+    ]
+    has_val_data_paths = bool(data_config.get("val_data_paths"))
+    if not has_val_data_paths and data_config.get("validation") is not None:
+        val_sources += [
+            (data, data.dataset)
+            for data in load(data_config["validation"], "validation")
+        ]
+    if val_sources:
+        val_task_data_processors, val_task_data_preprocessors = processors(
+            [data for data, _ in val_sources]
+        )
         val_dataset["default"] = AllTaskProcessedDataset(
-            data.val_dataset,
+            merge_datasets([split for _, split in val_sources]),
             tokenizer,
             None,
-            task_data_processors,
-            task_data_preprocessors=task_data_preprocessors,
+            val_task_data_processors,
+            task_data_preprocessors=val_task_data_preprocessors,
             max_seq_length=data_config["max_input_seq_length"],
         )
         print(
             f"  ✓ Validation dataset loaded with {len(val_dataset['default'])} samples."
         )
 
+    # legacy val_data_paths: one PreferenceDataset per named entry
+    val_task_data_preprocessors = {}
     if "val_data_paths" in data_config and data_config["val_data_paths"]:
         assert isinstance(data_config["val_data_paths"], dict), (
             f"Invalid type for val_data_paths: {type(data_config['val_data_paths'])}. val_data_paths must be a dictionary."
@@ -384,29 +420,5 @@ def setup_preference_data(
             print(
                 f"  ✓ Validation dataset '{val_dataset_name}' loaded with {len(val_dataset[val_dataset_name])} samples."
             )
-
-    elif "validation" in data_config and data_config["validation"] is not None:
-        if "default" in data_config:
-            update_single_dataset_config(
-                data_config["validation"], data_config["default"]
-            )
-        val_data = load_preference_dataset(data_config["validation"])
-        val_task_data_processors = {
-            val_data.task_name: (val_data.task_spec, typed_processor_fn)
-        }
-        if hasattr(val_data, "preprocessor") and val_data.preprocessor is not None:
-            val_task_data_preprocessors = {val_data.task_name: val_data.preprocessor}
-
-        val_dataset["default"] = AllTaskProcessedDataset(
-            val_data.dataset,
-            tokenizer,
-            None,
-            val_task_data_processors,
-            task_data_preprocessors=val_task_data_preprocessors,
-            max_seq_length=data_config["max_input_seq_length"],
-        )
-        print(
-            f"  ✓ Validation dataset loaded with {len(val_dataset['default'])} samples."
-        )
 
     return dataset, val_dataset

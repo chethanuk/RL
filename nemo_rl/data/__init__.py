@@ -91,12 +91,14 @@ class DataConfig(TypedDict):
         | PreferenceDatasetConfig
         | EnergonSourceConfig
         | list[ResponseDatasetConfig]
+        | list[PreferenceDatasetConfig]
     )
     validation: NotRequired[
         ResponseDatasetConfig
         | PreferenceDatasetConfig
         | EnergonSourceConfig
         | list[ResponseDatasetConfig]
+        | list[PreferenceDatasetConfig]
         | None
     ]
     # default settings for all datasets, will be overridden by dataset-specific settings
