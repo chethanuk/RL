@@ -111,7 +111,7 @@ sbatch ray.sub \
 * - `WANDB_API_KEY`
   - Setting this allows you to use the wandb logger without having to run `wandb login`.
 * - `HF_TOKEN`
-  - Setting the token used by huggingface-hub. Avoids having to run the `huggingface-cli login`
+  - Setting the token used by huggingface-hub. Avoids having to run `hf auth login`
 * - `HF_DATASETS_CACHE`
   - Sets the cache dir for downloaded Huggingface datasets.
 ``````
