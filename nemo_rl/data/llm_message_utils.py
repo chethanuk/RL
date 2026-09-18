@@ -14,6 +14,7 @@
 import warnings
 from typing import Any, Optional, Union, cast
 
+import jinja2
 import numpy as np
 import torch
 from datasets import Dataset
@@ -548,6 +549,7 @@ def get_formatted_message_log(
             + message_log_strs[first_user_msg_id + 1 :]
         )
 
+    n_deferred = 0  # leading system messages whose render was deferred
     for i, message in enumerate(message_log_strs):
         # If enabled, add_generation_prompt is only used on user messages to include
         # the assistant's generation prompt as part of the user message.
@@ -561,9 +563,21 @@ def get_formatted_message_log(
         if tools is not None:
             template_kwargs["tools"] = tools
 
-        formatted_message: str = tokenizer.apply_chat_template(  # type: ignore
-            message_log_strs[: i + 1], **template_kwargs
-        )
+        try:
+            formatted_message: str = tokenizer.apply_chat_template(  # type: ignore
+                message_log_strs[: i + 1], **template_kwargs
+            )
+        except jinja2.exceptions.TemplateError:
+            # Some templates cannot render a system-only prefix. Defer it: this
+            # message gets an empty chunk and the next render carries its text.
+            # Templates that render the prefix are unchanged.
+            if i + 1 < len(message_log_strs) and all(
+                m["role"] == "system" for m in message_log_strs[: i + 1]
+            ):
+                formatted_message = prev_formatted_message
+                n_deferred += 1
+            else:
+                raise
 
         ## get the length of the previous message, excluding the eos token (if present)
         prev_message_len_no_eos: int = get_first_index_that_differs(
@@ -597,7 +611,7 @@ def get_formatted_message_log(
                 print(formatted_message)
                 print("=" * 80 + "\n")
 
-        if i == 0:
+        if i == n_deferred:
             if add_bos_token:
                 if tokenizer.bos_token is None:
                     warnings.warn(
