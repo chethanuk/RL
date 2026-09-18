@@ -18,6 +18,10 @@ from nemo_rl.data.energon.config import EnergonLoaderConfig, EnergonSourceConfig
 
 
 class ResponseDatasetConfig(TypedDict):
+    # Built-in dataset class name (e.g. OpenMathInstruct2Dataset) or an importable
+    # dotted path to a dataset class. Takes precedence over dataset_name.
+    dataset_cls: NotRequired[str]
+    # Legacy alias: a DATASET_REGISTRY key (e.g. OpenMathInstruct-2) or a dotted path.
     dataset_name: NotRequired[str]
     data_path: NotRequired[str]
     input_key: NotRequired[str]
@@ -43,6 +47,10 @@ class ResponseDatasetConfig(TypedDict):
 
 
 class PreferenceDatasetConfig(TypedDict):
+    # Built-in dataset class name (e.g. OpenMathInstruct2Dataset) or an importable
+    # dotted path to a dataset class. Takes precedence over dataset_name.
+    dataset_cls: NotRequired[str]
+    # Legacy alias: a DATASET_REGISTRY key (e.g. OpenMathInstruct-2) or a dotted path.
     dataset_name: NotRequired[str]
     data_path: NotRequired[str]
     prompt_key: NotRequired[str]

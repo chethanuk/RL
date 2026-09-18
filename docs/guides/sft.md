@@ -144,7 +144,7 @@ data:
 
 If you want to plug in a dataset class that lives outside the `nemo_rl`
 package (so you don't have to edit the built-in registry), set
-`dataset_name` to a fully qualified dotted import path. The dispatcher
+`dataset_cls` to a fully qualified dotted import path. The dispatcher
 will import the module and resolve the class. The class must accept the
 same kwargs as the built-in datasets (i.e. the full data config) and
 implement `set_task_spec` and `set_processor`.
@@ -152,11 +152,16 @@ implement `set_task_spec` and `set_processor`.
 ```yaml
 data:
   default:
-    dataset_name: my_pkg.my_module.MyDataset  # importable from PYTHONPATH
+    dataset_cls: my_pkg.my_module.MyDataset  # importable from PYTHONPATH
 ```
 
 The class must be importable — install it as a package or add its
 parent directory to `PYTHONPATH` before launching training.
+
+`dataset_cls` also takes the class name of a built-in dataset, e.g.
+`dataset_cls: OpenMathInstruct2Dataset`. The older `dataset_name` key (a registry name
+such as `OpenMathInstruct-2`, or a dotted path) still works. When both are
+set, `dataset_cls` is used and `dataset_name` is ignored with a warning.
 
 We support using a single dataset for both train and validation by using `split_validation_size` to set the ratio of validation.
 This works for any dataset class that calls `split_train_validation` in its `__init__` — which today includes most built-in datasets, among them [OpenAssistant](../../nemo_rl/data/datasets/response_datasets/oasst.py), [OpenMathInstruct-2](../../nemo_rl/data/datasets/response_datasets/openmathinstruct2.py), [OpenR1-Math-220k](../../nemo_rl/data/datasets/response_datasets/openr1_math.py), [ResponseDataset](../../nemo_rl/data/datasets/response_datasets/response_dataset.py), and [Tulu3SftMixtureDataset](../../nemo_rl/data/datasets/response_datasets/tulu3.py).

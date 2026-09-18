@@ -55,7 +55,7 @@ from nemo_rl.data.datasets.response_datasets.response_dataset import ResponseDat
 from nemo_rl.data.datasets.response_datasets.squad import SquadDataset
 from nemo_rl.data.datasets.response_datasets.tulu3 import Tulu3SftMixtureDataset
 from nemo_rl.data.datasets.utils import (
-    resolve_external_dataset_class,
+    resolve_dataset_class,
     warn_on_unsupported_dataset_config_keys,
 )
 
@@ -98,31 +98,17 @@ DATASET_REGISTRY = {
 def load_response_dataset(data_config: ResponseDatasetConfig):
     """Loads response dataset.
 
-    Resolution order for ``data_config["dataset_name"]``:
-
-    1. If the name matches a key in ``DATASET_REGISTRY``, use the built-in
-       class.
-    2. Otherwise, if the name contains a ``.``, treat it as a fully qualified
-       dotted import path (e.g. ``my_pkg.my_module.MyDataset``) and import
-       the class dynamically. This lets users register custom datasets
-       without editing ``nemo_rl``.
-    3. Otherwise, raise ``ValueError`` with a helpful message.
+    The dataset is picked by ``data_config["dataset_cls"]``: a built-in
+    dataset class name (e.g. ``OpenMathInstruct2Dataset``) or an importable
+    dotted path (e.g. ``my_pkg.my_module.MyDataset``), which lets users plug
+    in datasets without editing ``nemo_rl``. The legacy
+    ``data_config["dataset_name"]`` (a ``DATASET_REGISTRY`` key or a dotted
+    path) still works; ``dataset_cls`` wins when both are set. See
+    ``resolve_dataset_class``.
     """
-    dataset_name = data_config["dataset_name"]
-
-    # load dataset
-    if dataset_name in DATASET_REGISTRY:
-        dataset_class = DATASET_REGISTRY[dataset_name]
-    elif "." in dataset_name:
-        dataset_class = resolve_external_dataset_class(dataset_name)
-    else:
-        raise ValueError(
-            f"Unsupported {dataset_name=}. Please set dataset_name to one of: "
-            "(1) a built-in dataset name, "
-            "(2) 'ResponseDataset' to load from a local JSONL file or HuggingFace, or "
-            "(3) an importable dotted path to a dataset class "
-            "(ensure it is installed and importable from PYTHONPATH)."
-        )
+    dataset_class = resolve_dataset_class(
+        data_config, DATASET_REGISTRY, "'ResponseDataset'"
+    )
 
     # Every dataset class accepts **kwargs, so unsupported config keys are
     # otherwise swallowed silently (e.g. `split_validation_size` on a dataset
