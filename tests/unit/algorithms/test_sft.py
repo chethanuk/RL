@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -192,6 +193,42 @@ def test_exit_on_max_steps(mock_components):
         if call.kwargs.get("prefix") == "timing/train"
     ][-1]
     assert final_timing_call.kwargs["step_finished"] is True
+
+
+def test_step_timing_includes_dataloader_fetch(mock_components):
+    """Time spent pulling a batch from the dataloader shows up in the step timings."""
+    fetch_delay_s = 0.3
+    batch = next(iter(mock_components["train_dataloader"]))
+
+    def slow_train_iter(self):
+        for _ in range(10):
+            time.sleep(fetch_delay_s)
+            yield batch
+
+    mock_components["train_dataloader"].__iter__ = slow_train_iter
+    mock_components["master_config"].sft.max_num_steps = 2
+
+    sft_train(
+        mock_components["policy"],
+        mock_components["train_dataloader"],
+        mock_components["val_dataloader"],
+        mock_components["tokenizer"],
+        mock_components["loss_fn"],
+        mock_components["master_config"],
+        mock_components["logger"],
+        mock_components["checkpointer"],
+        _initial_sft_save_state(),
+    )
+
+    step_timings = [
+        call.args[0]
+        for call in mock_components["logger"].log_metrics.call_args_list
+        if call.kwargs.get("prefix") == "timing/train"
+    ]
+    assert len(step_timings) == 2
+    for timings in step_timings:
+        assert timings["data_processing"] >= fetch_delay_s
+        assert timings["total_step_time"] >= fetch_delay_s
 
 
 def test_exit_on_max_epochs(mock_components):
