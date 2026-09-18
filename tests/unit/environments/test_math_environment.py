@@ -304,6 +304,70 @@ def test_multi_reward_env_step_basic(math_multi_reward_env, multi_reward_test_da
     assert all(result.terminateds == 1.0), "All terminated flags should be 1.0"
 
 
+# Every response carries the correct answer "4", so only the format reward varies.
+FORMAT_STRICTNESS_RESPONSES = [
+    # Exactly think-then-answer: passes both modes.
+    "<think>2 + 2 = 4</think>\n<answer>4</answer>",
+    # Text around the tags.
+    "Sure. <think>2 + 2 = 4</think> <answer>4</answer> Done.",
+    # Multi-line thinking and a blank line between the blocks.
+    "<think>2 + 2\n= 4</think>\n\n<answer>4</answer>",
+    # No closing think tag: fails both modes.
+    "<think>2 + 2 = 4\n<answer>4</answer>",
+    # Two answer blocks are ambiguous in either mode.
+    "<think>2 + 2 = 4</think>\n<answer>4</answer><answer>5</answer>",
+]
+
+
+def _step_multi_reward_env(env_config, responses):
+    env = create_env("math_multi_reward", env_config)
+    try:
+        return ray.get(
+            env.step.remote(
+                [
+                    [
+                        {"role": "user", "content": "What is 2 + 2?"},
+                        {"role": "assistant", "content": response},
+                    ]
+                    for response in responses
+                ],
+                [{"ground_truth": "4"} for _ in responses],
+            )
+        )
+    finally:
+        ray.kill(env)
+
+
+@pytest.mark.parametrize(
+    "format_strictness, expected_format_rewards",
+    [
+        pytest.param(None, [1.0, 0.0, 0.0, 0.0, 0.0], id="unset-defaults-to-strict"),
+        pytest.param("strict", [1.0, 0.0, 0.0, 0.0, 0.0], id="strict"),
+        pytest.param("soft", [1.0, 1.0, 1.0, 0.0, 0.0], id="soft"),
+    ],
+)
+def test_multi_reward_format_strictness(format_strictness, expected_format_rewards):
+    """Soft format checking accepts text around the tags; strict does not."""
+    env_config = {"num_workers": 1}
+    if format_strictness is not None:
+        env_config["format_strictness"] = format_strictness
+
+    result = _step_multi_reward_env(env_config, FORMAT_STRICTNESS_RESPONSES)
+
+    assert result.rewards["reward/format"].tolist() == expected_format_rewards
+    # Strictness only changes the format reward, never correctness.
+    assert result.rewards["reward/correctness"][:3].tolist() == [1.0, 1.0, 1.0]
+
+
+def test_multi_reward_format_strictness_rejects_unknown_value():
+    """A typo must fail loudly, not silently zero every reward."""
+    with pytest.raises(ray.exceptions.RayTaskError, match="format_strictness"):
+        _step_multi_reward_env(
+            {"num_workers": 1, "format_strictness": "lenient"},
+            FORMAT_STRICTNESS_RESPONSES[:1],
+        )
+
+
 @pytest.mark.parametrize(
     "multichoice_env, multichoice_test_data",
     [
