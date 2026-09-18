@@ -40,6 +40,34 @@ Make a note of the job submission number. Once the job begins, you can track its
 tail -f 1980204-logs/ray-driver.log
 ```
 
+#### Save a Checkpoint Before the Time Limit
+
+When a job reaches its `--time` limit, Slurm stops it and any training since the last checkpoint is lost. To save a checkpoint before that happens, set `checkpointing.checkpoint_must_save_by` in `COMMAND`:
+
+```sh
+# Run from the root of NeMo RL repo
+NUM_ACTOR_NODES=1  # Total nodes requested (head is colocated on ray-worker-0)
+
+COMMAND="uv run ./examples/run_grpo.py checkpointing.checkpoint_must_save_by=00:03:30:00" \
+CONTAINER=YOUR_CONTAINER \
+MOUNTS="$PWD:$PWD" \
+sbatch \
+    --nodes=${NUM_ACTOR_NODES} \
+    --account=YOUR_ACCOUNT \
+    --job-name=YOUR_JOBNAME \
+    --partition=YOUR_PARTITION \
+    --time=4:0:0 \
+    --gres=gpu:8 \
+    ray.sub
+```
+
+- The value is a duration in `DD:HH:MM:SS` format (days, hours, minutes, seconds). The default, `null`, turns it off.
+- The clock starts when the training loop starts, not when the Slurm job starts. Ray startup, model loading, and other setup run before that and are not counted, so don't set it to your full `--time`. Leave enough room for setup plus one checkpoint write. The example above leaves 30 minutes.
+- After each step, NeMo RL adds the average step time to the time elapsed so far. Once that sum reaches the deadline, it saves a checkpoint, logs that the timeout was reached, and stops training.
+- The checkpoint is only written when `checkpointing.enabled` is `true`. With checkpointing disabled, training still stops at the deadline, but nothing is saved.
+- To continue, submit the same command again. Training resumes from the latest checkpoint in `checkpointing.checkpoint_dir`.
+- A timeout checkpoint is a regular resumable checkpoint, not a final save, so `"final"` Hugging Face exports are not written for it. See [Automodel Consolidated Checkpoints](design-docs/checkpointing.md#automodel-consolidated-checkpoints).
+
 ### Interactive Launching
 
 > [!TIP]
