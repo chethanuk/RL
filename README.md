@@ -311,7 +311,7 @@ Use `uv run` to launch all commands. It handles pip installing implicitly and en
 >   This ensures consistent environment usage across different shells and sessions. Example: `uv run python examples/run_grpo.py`
 > - Ensure your system has the appropriate CUDA drivers installed, and that your PyTorch version is compatible with both your CUDA setup and hardware.
 > - If you update your environment in `pyproject.toml`, it is necessary to force a rebuild of the virtual environments by setting `NRL_FORCE_REBUILD_VENVS=true` next time you launch a run.
-> - **Reminder**: Don't forget to set your `HF_HOME`, `WANDB_API_KEY`, and `HF_DATASETS_CACHE` (if needed). You'll need to do a `huggingface-cli login` as well for Llama models.
+> - **Reminder**: Don't forget to set your `HF_HOME`, `WANDB_API_KEY`, and `HF_DATASETS_CACHE` (if needed). You'll need to do an `hf auth login` as well for Llama models.
 
 
 ## GRPO
