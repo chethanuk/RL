@@ -15,6 +15,7 @@
 
 from typing import Any, Callable
 
+import jinja2
 import pytest
 import torch
 from PIL import Image
@@ -572,6 +573,98 @@ def test_get_formatted_message_log_models(
                 add_special_tokens=False,
             )[0]
             assert normalize(actual_concat) == normalize(expected_concat)
+
+
+# Mimics templates that pop the system turn then read messages[-1]; they cannot
+# render a system-only prefix.
+SYSTEM_DROPPING_CHAT_TEMPLATE = (
+    "{{ bos_token }}"
+    "{% if messages[0]['role'] == 'system' %}"
+    r"{% set sys = messages[0]['content'] + '\n\n' %}"
+    "{% set messages = messages[1:] %}"
+    "{% else %}{% set sys = '' %}{% endif %}"
+    "{% set last_role = messages[-1]['role'] %}"
+    "{% for m in messages %}"
+    "{% if m['role'] == 'user' %}"
+    "<user>{% if loop.first %}{{ sys }}{% endif %}{{ m['content'] }}</user>"
+    "{% else %}<assistant>{{ m['content'] }}{{ eos_token }}{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt and last_role != 'assistant' %}<assistant>{% endif %}"
+)
+
+
+@pytest.mark.parametrize(
+    "add_generation_prompt", [False, True], ids=["no_gen_prompt", "gen_prompt"]
+)
+@pytest.mark.parametrize("with_system", [True, False], ids=["system", "no_system"])
+def test_get_formatted_message_log_system_prompt_with_template_that_drops_system(
+    with_system, add_generation_prompt
+) -> None:
+    """A system prompt with a template that folds it into the first user turn
+    formats without error, keeps the system text, and yields a single BOS."""
+    tokenizer = AutoTokenizer.from_pretrained(
+        "hf-internal-testing/tiny-random-Gemma3ForCausalLM"
+    )
+    tokenizer.chat_template = SYSTEM_DROPPING_CHAT_TEMPLATE
+    log = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "4"},
+    ]
+    if with_system:
+        log.insert(0, {"role": "system", "content": "You are a helpful assistant."})
+
+    result = get_formatted_message_log(
+        log,
+        tokenizer,
+        TaskDataSpec(task_name="test"),
+        add_generation_prompt=add_generation_prompt,
+    )
+
+    assert len(result) == len(log)
+    assert [m["role"] for m in result] == [m["role"] for m in log]
+    assert "".join(m["content"] for m in result) == tokenizer.apply_chat_template(
+        log, tokenize=False
+    )
+    assert all(m["token_ids"].dtype == torch.int64 for m in result)
+    flat_ids = message_log_to_flat_messages(result)["token_ids"]
+    assert (flat_ids == tokenizer.bos_token_id).sum().item() == 1
+    if with_system:
+        assert result[0]["content"] == ""
+        assert result[0]["token_ids"].numel() == 0
+        assert "You are a helpful assistant." in result[1]["content"]
+
+
+def test_get_formatted_message_log_system_chunk_unchanged_for_templates_that_render_it() -> (
+    None
+):
+    """With a template that renders a system-only prefix, the system message
+    keeps its own non-empty chunk."""
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
+    log = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "4"},
+    ]
+
+    result = get_formatted_message_log(log, tokenizer, TaskDataSpec(task_name="test"))
+
+    assert result[0]["content"] == tokenizer.apply_chat_template(
+        log[:1], tokenize=False
+    )
+    assert result[0]["token_ids"].numel() > 0
+
+
+def test_get_formatted_message_log_system_only_log_still_raises() -> None:
+    """A system-only log has no later message to carry the system text, so the
+    template error still surfaces."""
+    tokenizer = AutoTokenizer.from_pretrained(
+        "hf-internal-testing/tiny-random-Gemma3ForCausalLM"
+    )
+    tokenizer.chat_template = SYSTEM_DROPPING_CHAT_TEMPLATE
+    log = [{"role": "system", "content": "You are a helpful assistant."}]
+
+    with pytest.raises(jinja2.exceptions.TemplateError):
+        get_formatted_message_log(log, tokenizer, TaskDataSpec(task_name="test"))
 
 
 @pytest.mark.parametrize("enable_thinking", [True, False])
