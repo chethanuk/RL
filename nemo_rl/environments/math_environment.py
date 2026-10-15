@@ -16,7 +16,7 @@ import io
 import itertools
 import logging
 import re
-from typing import Any, NotRequired, TypedDict, Union
+from typing import Any, Literal, NotRequired, TypedDict, Union
 
 import ray
 import torch
@@ -46,6 +46,11 @@ class MathEnvConfig(TypedDict):
     # The verifier type. None defaults to "math".
     verifier_type: NotRequired[str | None]
     math_verify_impl: NotRequired[str | None]
+    # How strictly math_multi_reward scores reward/format; other envs ignore it.
+    # "strict" (also used when unset): the whole response must be exactly
+    # <think>...</think>\n<answer>...</answer>. "soft": the think block followed by
+    # the answer block anywhere in the response, with any whitespace between them.
+    format_strictness: NotRequired[Literal["strict", "soft"] | None]
 
 
 @contextlib.contextmanager
@@ -299,6 +304,12 @@ class HFMultiRewardVerifyWorker:
             names to per-sample scores.
             If return_extracted_answer is True, returns (scores_dict, extracted_answers).
         """
+        # Checked outside the per-sample loop: its except would turn a typo into all-zero rewards.
+        format_strictness = kwargs.get("format_strictness")
+        if format_strictness not in (None, "strict", "soft"):
+            raise ValueError(
+                f"Unknown format_strictness: {format_strictness!r}. Expected 'strict' or 'soft'"
+            )
 
         def extract_xml_answer(text: str) -> str:
             answer = text.split("<answer>")[-1]
@@ -317,7 +328,10 @@ class HFMultiRewardVerifyWorker:
             """Reward function that checks if the completion has a specific format."""
             rewards = []
             for response in completions:
-                pattern = r"^<think>.*?</think>\n<answer>.*?</answer>$"
+                if format_strictness == "soft":
+                    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
+                else:
+                    pattern = r"^<think>.*?</think>\n<answer>.*?</answer>$"
 
                 if (
                     re.search(pattern, response, re.DOTALL)
@@ -607,6 +621,7 @@ class MathMultiRewardEnvironment(BaseMathEnvironment):
                 ground_truth_chunk,
                 return_extracted_answer,
                 math_verify_impl=self.cfg.get("math_verify_impl", "hf_math_verify"),
+                format_strictness=self.cfg.get("format_strictness"),
             )
             for i, (chunk, ground_truth_chunk) in enumerate(
                 zip(chunked_assistant_response_batch, chunked_ground_truths)
