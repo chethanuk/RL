@@ -17,7 +17,9 @@ import tempfile
 
 import pytest
 
+from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.datasets import load_preference_dataset
+from nemo_rl.data.utils import setup_preference_data
 
 
 def create_sample_data(
@@ -182,3 +184,158 @@ def test_build_in_dataset(dataset_name):
             first_example["completions"][1]["completion"][0]["content"][:20]
             == "it's a bit tricky as"
         )
+
+
+def _write_jsonl(path, rows):
+    with open(path, "w") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+    return str(path)
+
+
+def _binary_rows(n):
+    return [
+        {"prompt": f"q{i}", "chosen": f"good {i}", "rejected": f"bad {i}"}
+        for i in range(n)
+    ]
+
+
+def _ranked_rows(n):
+    return [
+        {
+            "context": [{"role": "user", "content": f"q{i}"}],
+            "completions": [
+                {"rank": 0, "completion": [{"role": "assistant", "content": "good"}]},
+                {"rank": 1, "completion": [{"role": "assistant", "content": "bad"}]},
+            ],
+        }
+        for i in range(n)
+    ]
+
+
+@pytest.fixture(scope="module")
+def preference_tokenizer():
+    return get_tokenizer({"name": "Qwen/Qwen3-0.6B"})
+
+
+@pytest.fixture
+def preference_files(tmp_path):
+    return {
+        "a": _write_jsonl(tmp_path / "a.jsonl", _binary_rows(2)),
+        "b": _write_jsonl(tmp_path / "b.jsonl", _binary_rows(3)),
+        "ranked": _write_jsonl(tmp_path / "ranked.jsonl", _ranked_rows(2)),
+    }
+
+
+BINARY_DEFAULT = {"dataset_name": "BinaryPreferenceDataset"}
+
+
+@pytest.mark.parametrize(
+    "data_config,expected_train_len,expected_val_lens",
+    [
+        pytest.param(
+            {
+                "train": {"data_path": "a"},
+                "validation": {"data_path": "b"},
+                "default": BINARY_DEFAULT,
+            },
+            2,
+            {"default": 3},
+            id="single_dict_train_and_validation",
+        ),
+        pytest.param(
+            {
+                "train": [{"data_path": "a"}, {"data_path": "b"}],
+                "default": BINARY_DEFAULT,
+            },
+            5,
+            {},
+            id="train_list",
+        ),
+        pytest.param(
+            # Same task_name twice: rows from both entries are kept and share
+            # one processor slot, as setup_response_data does.
+            {
+                "train": [{"data_path": "a"}, {"data_path": "a"}],
+                "default": BINARY_DEFAULT,
+            },
+            4,
+            {},
+            id="same_file_listed_twice",
+        ),
+        pytest.param(
+            {
+                "train": [{"data_path": "a"}, {"data_path": "b"}],
+                "validation": [
+                    {"data_path": "a"},
+                    {"data_path": "ranked", "dataset_name": "PreferenceDataset"},
+                ],
+                "default": BINARY_DEFAULT,
+            },
+            5,
+            {"default": 4},
+            id="train_and_validation_lists_merge_into_default",
+        ),
+        pytest.param(
+            {
+                "train": [{"data_path": "a"}, {"data_path": "b"}],
+                "default": BINARY_DEFAULT,
+                "val_data_paths": {"first": "ranked", "second": "ranked"},
+            },
+            5,
+            {"first": 2, "second": 2},
+            id="legacy_val_data_paths_with_train_list",
+        ),
+        pytest.param(
+            {
+                "train": {"data_path": "a"},
+                "validation": [{"data_path": "b"}],
+                "default": BINARY_DEFAULT,
+                "val_data_paths": {"legacy": "ranked"},
+            },
+            2,
+            {"legacy": 2},
+            id="legacy_val_data_paths_takes_precedence_over_validation",
+        ),
+        pytest.param(
+            {
+                "train": {"data_path": "a", "dataset_name": "BinaryPreferenceDataset"},
+                "default": None,
+            },
+            2,
+            {},
+            id="null_default",
+        ),
+    ],
+)
+def test_setup_preference_data_loads_dataset_lists(
+    preference_tokenizer,
+    preference_files,
+    data_config,
+    expected_train_len,
+    expected_val_lens,
+):
+    def resolve(cfg):
+        return {**cfg, "data_path": preference_files[cfg["data_path"]]}
+
+    data_config = {**data_config, "max_input_seq_length": 128}
+    for split in ("train", "validation"):
+        cfg = data_config.get(split)
+        if isinstance(cfg, list):
+            data_config[split] = [resolve(c) for c in cfg]
+        elif cfg is not None:
+            data_config[split] = resolve(cfg)
+    if "val_data_paths" in data_config:
+        data_config["val_data_paths"] = {
+            name: preference_files[key]
+            for name, key in data_config["val_data_paths"].items()
+        }
+
+    train, val = setup_preference_data(preference_tokenizer, data_config)
+
+    assert len(train) == expected_train_len
+    assert {name: len(ds) for name, ds in val.items()} == expected_val_lens
+    # Every merged row must reach a processor for its own task and tokenize.
+    for ds in [train, *val.values()]:
+        for i in range(len(ds)):
+            assert ds[i]["message_log_chosen"]

@@ -179,6 +179,32 @@ Your JSONL files should contain one JSON object per line with the following stru
 }
 ```
 
+We support using multiple datasets for train and validation. Each entry takes the same keys as a single dataset and falls back to `default` for any key it does not set. The train entries are concatenated into one training set, and the validation entries (plus any `split_validation_size` splits of the train entries) are concatenated into one validation set named `default`. Here's an example configuration:
+```yaml
+data:
+  # other data settings, see `examples/configs/dpo.yaml` for more details
+  ...
+  # dataset settings
+  train:
+    # train dataset 1, overrides prompt_key
+    - data_path: /path/to/local/train_dataset_1.jsonl
+      prompt_key: context
+    # train dataset 2, uses the default values
+    - data_path: /path/to/local/train_dataset_2.jsonl
+  validation:
+    - data_path: /path/to/local/val_dataset_1.jsonl
+    # validation dataset 2, a different dataset class
+    - data_path: /path/to/local/val_dataset_2.jsonl
+      dataset_name: PreferenceDataset
+  default:
+    dataset_name: BinaryPreferenceDataset
+    prompt_key: prompt
+    chosen_key: chosen
+    rejected_key: rejected
+```
+
+To report each validation set under its own name instead, use `val_data_paths` as shown above. When `val_data_paths` is set, `validation` is ignored.
+
 ### Custom datasets defined outside NeMo RL
 
 If you want to plug in a preference dataset class that lives outside the
