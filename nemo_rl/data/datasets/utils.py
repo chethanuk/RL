@@ -144,7 +144,9 @@ def load_dataset_from_path(
     return raw_dataset
 
 
-def resolve_external_dataset_class(dataset_name: str) -> type:
+def resolve_external_dataset_class(
+    dataset_name: str, config_key: str = "dataset_name"
+) -> type:
     """Resolve a fully-qualified dotted dataset path to a class.
 
     Used by both ``load_response_dataset`` and ``load_preference_dataset``
@@ -157,6 +159,8 @@ def resolve_external_dataset_class(dataset_name: str) -> type:
     looks like a dotted import path (i.e. contains a ``.``); this helper
     focuses on the import / attribute-lookup / type-validation steps and
     raises ``ValueError`` with an actionable message on any failure.
+    ``config_key`` is the data-config key the path came from, used in the
+    error messages.
     """
     module_path, _, class_name = dataset_name.rpartition(".")
     try:
@@ -164,21 +168,86 @@ def resolve_external_dataset_class(dataset_name: str) -> type:
     except ImportError as e:
         raise ValueError(
             f"Could not import module {module_path!r} for "
-            f"dataset_name={dataset_name!r}. Ensure the module is "
+            f"{config_key}={dataset_name!r}. Ensure the module is "
             "installed and importable from PYTHONPATH."
         ) from e
     if not hasattr(module, class_name):
         raise ValueError(
             f"Module {module_path!r} has no attribute {class_name!r} "
-            f"(referenced by dataset_name={dataset_name!r})."
+            f"(referenced by {config_key}={dataset_name!r})."
         )
     dataset_class = getattr(module, class_name)
     if not isinstance(dataset_class, type):
         raise ValueError(
-            f"dataset_name={dataset_name!r} resolved to {dataset_class!r}, "
+            f"{config_key}={dataset_name!r} resolved to {dataset_class!r}, "
             "which is not a class. Expected a dataset class."
         )
     return dataset_class
+
+
+def resolve_dataset_class(
+    data_config: Mapping[str, Any], registry: Mapping[str, Any], builtin_hint: str
+) -> Any:
+    """Return the dataset class named by ``data_config``.
+
+    ``dataset_cls`` is the canonical key. It takes either the class name of a
+    dataset in ``registry`` (e.g. ``OpenMathInstruct2Dataset``) or a fully
+    qualified dotted import path. Registry entries that are
+    ``functools.partial`` (the AIME variants) are looked up by the wrapped
+    class name; their pre-bound kwargs are not applied, so options such as
+    ``variant`` are set as ordinary data config keys.
+
+    ``dataset_name`` is the legacy key and resolves as before: a registry
+    id, then a dotted import path. When both keys are set, ``dataset_cls``
+    wins and ``dataset_name`` is ignored with a warning (recipes inherit
+    ``dataset_name`` from their exemplar config, so both often arrive
+    together). ``builtin_hint`` names the generic loadable classes in the
+    legacy error message.
+    """
+    dataset_cls = data_config.get("dataset_cls")
+    dataset_name = data_config.get("dataset_name")
+
+    if dataset_cls is not None:
+        if dataset_name is not None:
+            warnings.warn(
+                f"dataset_cls={dataset_cls!r} is set, so dataset_name="
+                f"{dataset_name!r} is ignored. Remove dataset_name (or set it "
+                "to null).",
+                stacklevel=3,
+            )
+        classes_by_name = {}
+        for entry in registry.values():
+            while isinstance(entry, functools.partial):
+                entry = entry.func
+            if isinstance(entry, type):
+                classes_by_name[entry.__name__] = entry
+        if dataset_cls in classes_by_name:
+            return classes_by_name[dataset_cls]
+        if "." in dataset_cls:
+            return resolve_external_dataset_class(dataset_cls, "dataset_cls")
+        raise ValueError(
+            f"Unsupported {dataset_cls=}. Please set dataset_cls to one of: "
+            f"(1) a built-in dataset class name ({', '.join(sorted(classes_by_name))}), or "
+            "(2) an importable dotted path to a dataset class "
+            "(ensure it is installed and importable from PYTHONPATH)."
+        )
+
+    if dataset_name is None:
+        raise ValueError(
+            "The data config sets no dataset. Please set dataset_cls "
+            "(or the legacy dataset_name)."
+        )
+    if dataset_name in registry:
+        return registry[dataset_name]
+    if "." in dataset_name:
+        return resolve_external_dataset_class(dataset_name)
+    raise ValueError(
+        f"Unsupported {dataset_name=}. Please set dataset_name to one of: "
+        "(1) a built-in dataset name, "
+        f"(2) {builtin_hint} to load from a local JSONL file or HuggingFace, or "
+        "(3) an importable dotted path to a dataset class "
+        "(ensure it is installed and importable from PYTHONPATH)."
+    )
 
 
 # Constructor-consumed keys from ResponseDatasetConfig / PreferenceDatasetConfig
@@ -261,8 +330,16 @@ def warn_on_unsupported_dataset_config_keys(
 
 
 def update_single_dataset_config(data_config: dict, default_data_config: dict) -> None:
-    """Fill the single dataset config with default dataset config."""
+    """Fill the single dataset config with default dataset config.
+
+    ``dataset_cls`` and ``dataset_name`` both pick the dataset, so they are
+    filled as one slot: a dataset that sets either keeps its choice.
+    """
+    dataset_keys = ("dataset_cls", "dataset_name")
+    has_dataset = any(data_config.get(key) is not None for key in dataset_keys)
     for key in default_data_config.keys():
+        if has_dataset and key in dataset_keys:
+            continue
         if key not in data_config:
             data_config[key] = default_data_config[key]
 

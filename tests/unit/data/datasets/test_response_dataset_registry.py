@@ -41,8 +41,23 @@ from nemo_rl.data.datasets.response_datasets import (
 from nemo_rl.data.datasets.response_datasets import (
     load_response_dataset,
 )
+from nemo_rl.data.datasets.preference_datasets import (
+    HelpSteer3Dataset as PreferenceHelpSteer3Dataset,
+)
+from nemo_rl.data.datasets.preference_datasets import (
+    PreferenceDataset,
+    Tulu3PreferenceDataset,
+)
+from nemo_rl.data.datasets.response_datasets import (
+    AIMEDataset,
+    GSM8KDataset,
+    OpenMathInstruct2Dataset,
+    ResponseDataset,
+)
 from nemo_rl.data.datasets.utils import (
+    resolve_dataset_class,
     resolve_external_dataset_class,
+    update_single_dataset_config,
     warn_on_unsupported_dataset_config_keys,
 )
 
@@ -292,3 +307,174 @@ def test_load_preference_dataset_warns_on_swallowed_key(stub_module):
     }
     with pytest.warns(UserWarning, match="split='test'"):
         load_preference_dataset(config)
+
+
+# ---------------------------------------------------------------------------
+# dataset_cls: canonical key, with dataset_name kept as the legacy alias
+# ---------------------------------------------------------------------------
+
+_LOADERS = [
+    pytest.param(
+        load_response_dataset,
+        RESPONSE_REGISTRY,
+        _StubResponseDataset,
+        "StubResponseDataset",
+        id="response",
+    ),
+    pytest.param(
+        load_preference_dataset,
+        PREFERENCE_REGISTRY,
+        _StubPreferenceDataset,
+        "StubPreferenceDataset",
+        id="preference",
+    ),
+]
+
+
+@pytest.mark.parametrize(("loader", "registry", "stub_cls", "stub_attr"), _LOADERS)
+@pytest.mark.parametrize(
+    "key_kind",
+    ["dataset_cls_dotted_path", "dataset_cls_class_name", "dataset_name_legacy"],
+)
+def test_load_dataset_by_key(
+    monkeypatch, stub_module, loader, registry, stub_cls, stub_attr, key_kind
+):
+    """``dataset_cls`` takes a built-in class name or a dotted path; a
+    legacy ``dataset_name`` config loads exactly as before, with no warning."""
+    monkeypatch.setitem(registry, "stub-id", stub_cls)
+    if key_kind == "dataset_cls_dotted_path":
+        config = {"dataset_cls": f"{stub_module}.{stub_attr}"}
+    elif key_kind == "dataset_cls_class_name":
+        # Looked up by the class name, not by the registry id "stub-id".
+        config = {"dataset_cls": stub_cls.__name__}
+    else:
+        config = {"dataset_name": "stub-id"}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        dataset = loader(config)
+
+    assert isinstance(dataset, stub_cls)
+    assert stub_cls.last_init_kwargs == config
+
+
+def test_dataset_cls_class_name_ignores_partial_bound_kwargs(monkeypatch):
+    """Registry entries like the AIME variants are ``functools.partial``.
+    ``dataset_cls`` names the wrapped class; options such as ``variant`` are
+    ordinary config keys, not the partial's pre-bound ones."""
+    monkeypatch.setitem(
+        RESPONSE_REGISTRY,
+        "stub-2025",
+        functools.partial(_StubResponseDataset, variant="2025"),
+    )
+    load_response_dataset({"dataset_cls": "_StubResponseDataset"})
+    assert _StubResponseDataset.last_init_kwargs == {
+        "dataset_cls": "_StubResponseDataset"
+    }
+
+    load_response_dataset({"dataset_cls": "_StubResponseDataset", "variant": "2026"})
+    assert _StubResponseDataset.last_init_kwargs["variant"] == "2026"
+
+
+@pytest.mark.parametrize(("loader", "registry", "stub_cls", "stub_attr"), _LOADERS)
+def test_dataset_cls_wins_over_dataset_name_with_warning(
+    stub_module, loader, registry, stub_cls, stub_attr
+):
+    """Recipes inherit ``dataset_name`` from their exemplar, so both keys
+    often arrive together. ``dataset_cls`` wins and the legacy value is
+    never resolved (this one is not even importable)."""
+    config = {
+        "dataset_cls": f"{stub_module}.{stub_attr}",
+        "dataset_name": "nemo_rl_missing_module.OldDataset",
+    }
+    with pytest.warns(UserWarning, match="dataset_name=.*is ignored"):
+        dataset = loader(config)
+    assert isinstance(dataset, stub_cls)
+
+
+@pytest.mark.parametrize(("loader", "registry", "stub_cls", "stub_attr"), _LOADERS)
+@pytest.mark.parametrize(
+    ("config", "match"),
+    [
+        pytest.param(
+            {"dataset_cls": "OpenMathInstruct-2"},
+            "Unsupported dataset_cls='OpenMathInstruct-2'",
+            id="registry-id-is-not-a-class-name",
+        ),
+        pytest.param(
+            {"dataset_cls": "nemo_rl_missing_module.MyDataset"},
+            "Could not import module .*dataset_cls=",
+            id="unimportable-dotted-path",
+        ),
+        pytest.param({}, "dataset_cls", id="no-key"),
+        pytest.param(
+            {"dataset_cls": None, "dataset_name": None}, "dataset_cls", id="both-none"
+        ),
+    ],
+)
+def test_dataset_cls_errors(loader, registry, stub_cls, stub_attr, config, match):
+    with pytest.raises(ValueError, match=match):
+        loader(config)
+
+
+@pytest.mark.parametrize(
+    ("registry", "dataset_cls", "expected"),
+    [
+        (RESPONSE_REGISTRY, "OpenMathInstruct2Dataset", OpenMathInstruct2Dataset),
+        (RESPONSE_REGISTRY, "ResponseDataset", ResponseDataset),
+        (RESPONSE_REGISTRY, "GSM8KDataset", GSM8KDataset),
+        (RESPONSE_REGISTRY, "AIMEDataset", AIMEDataset),
+        (PREFERENCE_REGISTRY, "Tulu3PreferenceDataset", Tulu3PreferenceDataset),
+        (PREFERENCE_REGISTRY, "HelpSteer3Dataset", PreferenceHelpSteer3Dataset),
+        (PREFERENCE_REGISTRY, "PreferenceDataset", PreferenceDataset),
+    ],
+)
+def test_builtin_class_names_resolve(registry, dataset_cls, expected):
+    """Real registries, no instantiation: every built-in is reachable by its
+    class name, per registry (the two ``HelpSteer3Dataset`` differ)."""
+    assert resolve_dataset_class({"dataset_cls": dataset_cls}, registry, "") is expected
+
+
+@pytest.mark.parametrize("registry", [RESPONSE_REGISTRY, PREFERENCE_REGISTRY])
+def test_registry_class_names_unique(registry):
+    """Two different classes sharing a name would make one unreachable."""
+    classes = set()
+    for entry in registry.values():
+        while isinstance(entry, functools.partial):
+            entry = entry.func
+        classes.add(entry)
+    names = [cls.__name__ for cls in classes]
+    assert len(names) == len(set(names))
+
+
+@pytest.mark.parametrize(
+    ("entry", "default", "expected"),
+    [
+        pytest.param(
+            {"dataset_name": "B"},
+            {"dataset_cls": "A", "prompt_key": "p"},
+            {"dataset_name": "B", "prompt_key": "p"},
+            id="entry-name-beats-default-cls",
+        ),
+        pytest.param(
+            {"dataset_cls": "B"},
+            {"dataset_name": "A", "prompt_key": "p"},
+            {"dataset_cls": "B", "prompt_key": "p"},
+            id="entry-cls-beats-default-name",
+        ),
+        pytest.param(
+            {}, {"dataset_cls": "A"}, {"dataset_cls": "A"}, id="entry-has-neither"
+        ),
+        pytest.param(
+            {"dataset_name": None},
+            {"dataset_cls": "A"},
+            {"dataset_name": None, "dataset_cls": "A"},
+            id="entry-name-none",
+        ),
+    ],
+)
+def test_default_does_not_override_entry_dataset_key(entry, default, expected):
+    """``data.default`` fills ``dataset_cls``/``dataset_name`` as one slot, so
+    a default never overrides the dataset an entry picked."""
+    update_single_dataset_config(entry, default)
+    assert entry == expected
