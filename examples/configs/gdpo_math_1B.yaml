@@ -48,6 +48,9 @@ env:
   math_multi_reward:
     num_workers: 8
     math_verify_impl: "hf_math_verify"
+    # "strict": reward/format needs exactly <think>...</think>\n<answer>...</answer>.
+    # "soft": also accepts text around the blocks and any whitespace between them.
+    format_strictness: "strict"
 
 logger:
   wandb_enabled: true
